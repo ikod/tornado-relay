@@ -1,0 +1,5 @@
+tornado-relay (1.0.0-1) unstable; urgency=low
+
+  * Initial release (Closes: #nnnn)  <nnnn is the bug number of your ITP>
+
+ -- Igor <igor.khasilev@gmail.com>  Sun, 22 Dec 2013 16:45:22 +0200

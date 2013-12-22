@@ -1,0 +1,15 @@
+Source: tornado-relay
+Section: unknown
+Priority: extra
+Maintainer: Igor <igor.khasilev@gmail.com>
+Build-Depends: debhelper (>= 8.0.0)
+Standards-Version: 3.9.4
+Homepage: <insert the upstream URL, if relevant>
+#Vcs-Git: git://git.debian.org/collab-maint/tornado-relay.git
+#Vcs-Browser: http://git.debian.org/?p=collab-maint/tornado-relay.git;a=summary
+
+Package: tornado-relay
+Architecture: all
+Depends: python-carbon, python-tornado (>=2.3-2)
+Description: carbon-relay based on tornadoweb
+ https://github.com/ikod/tornado-relay
