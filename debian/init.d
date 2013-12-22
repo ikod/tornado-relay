@@ -53,7 +53,7 @@ do_start()
 	start-stop-daemon --start --quiet --pidfile $PIDFILE  --startas $DAEMON \
 		--name $NAME --test > /dev/null \
 		|| return 1
-	start-stop-daemon --start --quiet --pidfile $PIDFILE ---background --make-pidfile -startas $DAEMON \
+	start-stop-daemon --start --quiet --pidfile $PIDFILE --background --make-pidfile --startas $DAEMON \
 		--name $NAME -- $DAEMON_ARGS \
 		|| return 2
 
@@ -67,23 +67,10 @@ do_start()
 #
 do_stop()
 {
-	# Return
-	#   0 if daemon has been stopped
-	#   1 if daemon was already stopped
-	#   2 if daemon could not be stopped
-	#   other if a failure occurred
-	start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --pidfile $PIDFILE --name $NAME
-	RETVAL="$?"
-	[ "$RETVAL" = 2 ] && return 2
-	# Wait for children to finish too if this is a daemon that forks
-	# and if the daemon is only ever run from this initscript.
-	# If the above conditions are not satisfied then add some other code
-	# that waits for the process to drop all resources that could be
-	# needed by services started subsequently.  A last resort is to
-	# sleep for some time.
-	start-stop-daemon --stop --quiet --oknodo --retry=0/30/KILL/5 --exec $DAEMON
-	[ "$?" = 2 ] && return 2
-	# Many daemons don't delete their pidfiles when they exit.
+        parent=`cat $PIDFILE`
+        childs=`pgrep -P $parent`
+        kill -INT $parent $childs
+        RETVAL="$?"
 	rm -f $PIDFILE
 	return "$RETVAL"
 }
