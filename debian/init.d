@@ -13,14 +13,13 @@
 
 # Author: Igor <igor.khasilev@gmail.com>
 
-# PATH should only include /usr/* if it runs after the mountnfs.sh script
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC=tornado-relay             # Introduce a short description here
 NAME=tornado-relay             # Introduce the short server's name here
 DAEMON=/usr/sbin/tornado-relay # Introduce the server's location here
-DAEMON_ARGS="--background --make-pidfile"             # Arguments to run the daemon with
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
+DAEMON_ARGS=""
 
 # Exit if the package is not installed
 [ -x $DAEMON ] || exit 0
@@ -44,19 +43,19 @@ do_start()
 	#   0 if daemon has been started
 	#   1 if daemon was already running
 	#   2 if daemon could not be started
-	start-stop-daemon --start --quiet --pidfile $PIDFILE --exec $DAEMON --test > /dev/null \
-		|| return 1
-	start-stop-daemon --start --quiet --pidfile $PIDFILE --exec $DAEMON -- \
-		$DAEMON_ARGS \
-		|| return 2
+	#start-stop-daemon --start --quiet --pidfile $PIDFILE --exec $DAEMON --test > /dev/null \
+	#	|| return 1
+	#start-stop-daemon --start --quiet --pidfile $PIDFILE --exec $DAEMON -- \
+	#	$DAEMON_ARGS \
+	#	|| return 2
 	# The above code will not work for interpreted scripts, use the next
 	# six lines below instead (Ref: #643337, start-stop-daemon(8) )
-	#start-stop-daemon --start --quiet --pidfile $PIDFILE --startas $DAEMON \
-	#	--name $NAME --test > /dev/null \
-	#	|| return 1
-	#start-stop-daemon --start --quiet --pidfile $PIDFILE --startas $DAEMON \
-	#	--name $NAME -- $DAEMON_ARGS \
-	#	|| return 2
+	start-stop-daemon --start --quiet --pidfile $PIDFILE  --startas $DAEMON \
+		--name $NAME --test > /dev/null \
+		|| return 1
+	start-stop-daemon --start --quiet --pidfile $PIDFILE ---background --make-pidfile -startas $DAEMON \
+		--name $NAME -- $DAEMON_ARGS \
+		|| return 2
 
 	# Add code here, if necessary, that waits for the process to be ready
 	# to handle requests from services started subsequently which depend

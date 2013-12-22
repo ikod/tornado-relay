@@ -7,4 +7,4 @@
 #
 
 # Additional options that are passed to the Daemon.
-DAEMON_OPTS=""
+DAEMON_ARGS="--line_port=2013 --pickle_port=2014 --destinations=localhost:2014:a --processes=2 --replication=1"
