@@ -67,12 +67,14 @@ do_start()
 #
 do_stop()
 {
-        parent=`cat $PIDFILE`
-        childs=`pgrep -P $parent`
-        kill -INT $parent $childs
-        RETVAL="$?"
-	rm -f $PIDFILE
-	return "$RETVAL"
+		if [ -f $PIDFILE ]; then
+			parent=`cat $PIDFILE`
+        	childs=`pgrep -P $parent`
+        	kill -INT $parent $childs
+        	RETVAL="$?"
+			rm -f $PIDFILE
+			return "$RETVAL"
+		fi
 }
 
 #

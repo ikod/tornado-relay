@@ -20,6 +20,7 @@ set -e
 
 case "$1" in
     configure)
+        ln -f -s /var/lib/tornado-relay/default /etc/default/tornado-relay
     ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)

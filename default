@@ -1,0 +1,11 @@
+# Defaults for tornado-relay initscript
+# sourced by /etc/init.d/tornado-relay
+# installed at /etc/default/tornado-relay by the maintainer scripts
+
+#
+# This is a POSIX shell fragment
+#
+
+# Additional options that are passed to the Daemon.
+export PYTHONPATH="/opt/graphite/lib:/usr/share/pyshared"
+DAEMON_ARGS="--line_port=2013 --pickle_port=2014 --destinations=localhost:2014:a --processes=2 --replication=1"
