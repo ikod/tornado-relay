@@ -8,10 +8,13 @@ import struct
 import time
 import sys
 import signal
+
 import tornado.ioloop
 import tornado.iostream
 import tornado.process
 import tornado.netutil
+
+from random import choice
 
 from tornado.options import options, define, parse_command_line, parse_config_file
 from collections import deque
@@ -35,6 +38,7 @@ define("rules", type=str, help="carbon rules file", default=None)
 define("instance", type=str, help="instance name", default="a")
 define("maxqlen", type=int, help="outpuit queue length", default=100000)
 define("config", type=str, help="path to config file", default=None)
+define("connpool", type=int, help="# of connections to each destination", default=1)
 
 parse_command_line()
 if options.config:
@@ -48,12 +52,44 @@ if not options.destinations:
 def mysleep(interval, callback):
     tornado.ioloop.IOLoop.instance().add_timeout(time.time() + interval, callback)
 
-
-class Destination(object):
-    __slots__ = ('name', 'addr', 'socket', 'state', 'stream', 'queue', 'overflows', 'last_reconnect', 'inxmit')
+class Connection(object):
+    '''
+    single connection to destination
+    '''
+    __slots__ = ('socket','stream','state','addr')
 
     DISCONNECTED = 0
     CONNECTED = 1
+
+    def __init__(self, addr):
+        self.addr = addr
+        self.socket = None
+        self.stream = None
+        self.state = Connection.DISCONNECTED
+
+        self.start_connection()
+
+    def stream_closed(self):
+        logging.error('%s disconnected from %s' % (tornado.process.task_id(),str(self.addr)))
+        self.state = Connection.DISCONNECTED
+        tornado.ioloop.IOLoop.instance().add_timeout(time.time() + RECONNECT_INTERVAL, self.start_connection)
+
+    @gen.engine
+    def start_connection(self):
+        logging.debug('%s start connection to %s' % (tornado.process.task_id(),str(self.addr)))
+        self.socket = socket.socket()
+        self.stream = tornado.iostream.IOStream(self.socket)
+        self.stream.set_close_callback(self.stream_closed)
+        yield gen.Task(self.stream.connect, self.addr)
+        if not self.stream.error:
+            self.state = Connection.CONNECTED
+            logging.debug('%s connected to %s' % (tornado.process.task_id(),str(self.addr)))
+        else:
+            self.state = Connection.DISCONNECTED
+            logging.debug('%s failed to connect to %s' % (tornado.process.task_id(),str(self.addr)))
+
+class Destination(object):
+    __slots__ = ('name', 'addr', 'queue', 'overflows', 'inxmit', 'connections')
 
     def __init__(self, n):
         """
@@ -63,43 +99,14 @@ class Destination(object):
         @type n: str
         """
         self.name = n
-        self.state = Destination.DISCONNECTED
         self.queue = deque([], options.maxqlen)
         self.overflows = 0
-        self.last_reconnect = 0
-        self.socket = None
-        self.stream = None
         self.inxmit = False
         self.addr = (self.name.split(':')[0], int(self.name.split(':')[1]))
+        self.connections = [Connection(self.addr) for i in range(options.connpool)]
+
         logger.debug(self.name + ' destination created')
 
-        self.start_connection()
-
-    def stream_closed(self):
-        logger.debug(self.name + ' disconnected')
-        self.state = Destination.DISCONNECTED
-        self.inxmit = False
-        tornado.ioloop.IOLoop.instance().add_timeout(time.time() + RECONNECT_INTERVAL, self.start_connection)
-
-    @gen.engine
-    def start_connection(self):
-        """
-        @type self: Destination
-        """
-        logger.debug(self.name + ' start connection')
-        assert self.state == Destination.DISCONNECTED
-        self.socket = socket.socket()
-        self.stream = tornado.iostream.IOStream(self.socket)
-        self.stream.set_close_callback(self.stream_closed)
-        yield gen.Task(self.stream.connect, self.addr)
-        if not self.stream.error:
-            logger.info(self.name + ' connected')
-            self.state = Destination.CONNECTED
-            # connected, start sending queued data
-            yield gen.Task(self.start_sendq)
-        else:
-            logger.error(self.name + ' can''t connect')
-            self.state = Destination.DISCONNECTED
 
     @gen.engine
     def start_sendq(self, callback=None):
@@ -109,12 +116,17 @@ class Destination(object):
             return
         self.inxmit = True
         logger.debug(self.name + ' sending ' + str(self.queue))
-        while self.state == Destination.CONNECTED and len(self.queue) > 0:
+        while len(self.queue) > 0:
+            available_connections = \
+                [ c for c in self.connections if c.state==Connection.CONNECTED ]
+            if len(available_connections) == 0:
+                break
             # start transmission
             data = self.queue.popleft()
             length = len(data)
             header = struct.pack('!L', length)
-            yield gen.Task(self.stream.write, header + data)
+            connection = choice(available_connections)
+            yield gen.Task(connection.stream.write, header + data)
         self.inxmit = False
         if callback:
             callback()
