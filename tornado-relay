@@ -83,7 +83,7 @@ class Connection(object):
         yield gen.Task(self.stream.connect, self.addr)
         if not self.stream.error:
             self.state = Connection.CONNECTED
-            logging.debug('%s connected to %s' % (tornado.process.task_id(),str(self.addr)))
+            logging.info('%s connected to %s' % (tornado.process.task_id(),str(self.addr)))
         else:
             self.state = Connection.DISCONNECTED
             logging.debug('%s failed to connect to %s' % (tornado.process.task_id(),str(self.addr)))
@@ -210,6 +210,7 @@ class PickleHandler(object):
         stream = tornado.iostream.IOStream(s)
 
         while not stream.closed():
+            data = None
             try:
                 header = yield gen.Task(stream.read_bytes, struct.calcsize('!L'))
                 msglen = struct.unpack('!L', header)[0]
@@ -219,6 +220,9 @@ class PickleHandler(object):
                 logging.error('IOError reading data in pickle_handler')
             except:
                 logging.error('Exception reading data in pickle_handler: '+sys.exc_info())
+
+            if not data:
+                continue
 
             router = self.router
             destinations = self.destinations
