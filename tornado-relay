@@ -126,7 +126,12 @@ class Destination(object):
             length = len(data)
             header = struct.pack('!L', length)
             connection = choice(available_connections)
-            yield gen.Task(connection.stream.write, header + data)
+            try:
+                yield gen.Task(connection.stream.write, header + data)
+            except IOError:
+                logging.error('IOError writing to %s' % (str(connection.addr)))
+            except:
+                logging.error('Unexpected exception '+sys.exc_info())
         self.inxmit = False
         if callback:
             callback()
@@ -205,10 +210,16 @@ class PickleHandler(object):
         stream = tornado.iostream.IOStream(s)
 
         while not stream.closed():
-            header = yield gen.Task(stream.read_bytes, struct.calcsize('!L'))
-            msglen = struct.unpack('!L', header)[0]
-            logger.debug('have to read ' + str(msglen) + ' bytes from ' + str(peer))
-            data = yield gen.Task(stream.read_bytes, msglen)
+            try:
+                header = yield gen.Task(stream.read_bytes, struct.calcsize('!L'))
+                msglen = struct.unpack('!L', header)[0]
+                logger.debug('have to read ' + str(msglen) + ' bytes from ' + str(peer))
+                data = yield gen.Task(stream.read_bytes, msglen)
+            except IOError:
+                logging.error('IOError reading data in pickle_handler')
+            except:
+                logging.error('Exception reading data in pickle_handler: '+sys.exc_info())
+
             router = self.router
             destinations = self.destinations
 
