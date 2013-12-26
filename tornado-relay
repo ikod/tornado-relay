@@ -206,23 +206,15 @@ class PickleHandler(object):
         @type s: socket.socket
         @type peer: str
         """
+
         logger.debug('pickle socket accepted')
         stream = tornado.iostream.IOStream(s)
 
         while not stream.closed():
-            data = None
-            try:
-                header = yield gen.Task(stream.read_bytes, struct.calcsize('!L'))
-                msglen = struct.unpack('!L', header)[0]
-                logger.debug('have to read ' + str(msglen) + ' bytes from ' + str(peer))
-                data = yield gen.Task(stream.read_bytes, msglen)
-            except IOError:
-                logging.error('IOError reading data in pickle_handler')
-            except:
-                logging.error('Exception reading data in pickle_handler: '+sys.exc_info())
 
-            if not data:
-                continue
+            header = yield gen.Task(stream.read_bytes, struct.calcsize('!L'))
+            msglen = struct.unpack('!L', header)[0]
+            data = yield gen.Task(stream.read_bytes, msglen)
 
             router = self.router
             destinations = self.destinations
