@@ -1,14 +1,44 @@
+tornado-relay (1.0.0-10) unstable; urgency=low
+
+  * remove tornado iostream from code
+
+ -- Igor <igor.khasilev@gmail.com>  Sat, 28 Dec 2013 10:05:14 +0000
+
+tornado-relay (1.0.0-9) unstable; urgency=low
+
+  * undefiled data exception 
+
+ -- Igor <igor.khasilev@gmail.com>  Tue, 24 Dec 2013 13:16:46 +0000
+
+tornado-relay (1.0.0-8) unstable; urgency=low
+
+  * exception handling
+
+ -- Igor <igor.khasilev@gmail.com>  Tue, 24 Dec 2013 09:24:45 +0000
+
+tornado-relay (1.0.0-7) unstable; urgency=low
+
+  * fix for 'default' overwrite
+
+ -- Igor <igor.khasilev@gmail.com>  Mon, 23 Dec 2013 20:27:44 +0000
+
+tornado-relay (1.0.0-6) unstable; urgency=low
+
+  * connpool option
+
+ -- Igor <igor.khasilev@gmail.com>  Mon, 23 Dec 2013 20:00:41 +0000
+
 tornado-relay (1.0.0-5) unstable; urgency=low
 
   * fixes in default
 
- -- Igor <igor.khasilev@gmail.com> Sun, 22 Dec 2013 18:03:37 +0000
+ -- Igor <igor.khasilev@gmail.com>  Sun, 22 Dec 2013 18:03:37 +0000
 
 tornado-relay (1.0.0-4) unstable; urgency=low
 
   * fixes in package
 
- -- Igor <igor.khasilev@gmail.com> Sun, 22 Dec 2013 17:46:52 +0000
+ -- Igor <igor.khasilev@gmail.com>  Sun, 22 Dec 2013 17:46:52 +0000
 
 tornado-relay (1.0.0-1) unstable; urgency=low
 

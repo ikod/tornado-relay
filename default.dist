@@ -8,4 +8,4 @@
 
 # Additional options that are passed to the Daemon.
 export PYTHONPATH="/opt/graphite/lib:/usr/share/pyshared"
-DAEMON_ARGS="--line_port=2013 --pickle_port=2014 --destinations=localhost:2014:a --processes=2 --replication=1"
+DAEMON_ARGS="--line_port=2013 --pickle_port=2014 --destinations=localhost:2014:a --processes=2 --connpool=1 --replication=1 --log-file-prefix=/var/log/tornado-relay"
