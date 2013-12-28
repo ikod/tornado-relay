@@ -29,7 +29,7 @@ from tornado import gen
 
 BACKLOG = 100
 RECONNECT_INTERVAL = 10
-CHUNKSIZE = 8 * 1024
+CHUNKSIZE = 16 * 1024
 
 define("line_port", type=int, help="port for line interface", default=2013)
 define("pickle_port", type=int, help="port for pickle interface", default=2014)
@@ -123,9 +123,7 @@ class Connection(object):
         def write_callback(fd, _):
             while self.to_send > 0:
                 try:
-                    logger.debug('send %d:%s bytes' % (self.sent, self.to_send))
-                    r = self.socket.send(data[self.sent:min(self.to_send, CHUNKSIZE)])
-                    logger.debug('sent: %d' % r)
+                    r = self.socket.send(data[self.sent:self.sent+min(self.to_send, CHUNKSIZE)])
                     self.sent += r
                     self.to_send -= r
                 except socket.error as e:
