@@ -11,6 +11,7 @@ import os
 import signal
 import functools
 import errno
+import traceback
 
 import tornado.ioloop
 import tornado.process
@@ -29,7 +30,8 @@ from tornado import gen
 
 BACKLOG = 100
 RECONNECT_INTERVAL = 10
-CHUNKSIZE = 16 * 1024
+CHUNK_SIZE = 16 * 1024
+MAX_LINE_LENGTH = 16 * 1024
 
 define("line_port", type=int, help="port for line interface", default=2013)
 define("pickle_port", type=int, help="port for pickle interface", default=2014)
@@ -60,7 +62,7 @@ class Connection(object):
     """
     single connection to destination
     """
-    __slots__ = ('socket', 'state', 'addr', 'to_send', 'sent')
+    __slots__ = ('socket', 'state', 'addr', 'to_send', 'sent', 'to_send_data', 'send_callback')
 
     DISCONNECTED = 0
     CONNECTED = 1
@@ -71,6 +73,8 @@ class Connection(object):
         self.state = Connection.DISCONNECTED
         self.to_send = None
         self.sent = None
+        self.to_send_data = None
+        self.send_callback = None
         self.start_connection()
 
     def handle_error(self, err):
@@ -80,25 +84,75 @@ class Connection(object):
         logging.info('%s failed to write/connect to %s: %s' % (
             tornado.process.task_id(),
             str(self.addr),
-            os.strerror(err)
+            os.strerror(err) if err else "-"
         ))
-        tornado.ioloop.IOLoop.instance().add_timeout(time.time() + RECONNECT_INTERVAL, self.start_connection)
+        io_loop = tornado.ioloop.IOLoop.instance()
+        io_loop.add_timeout(time.time() + RECONNECT_INTERVAL, self.start_connection)
+
+    def event_handler(self, fd, event):
+        #print fd, event, self.state
+        io_loop = tornado.ioloop.IOLoop.instance()
+        if self.state == Connection.DISCONNECTED:
+            if event & io_loop.ERROR:
+                err = self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                io_loop.remove_handler(fd)
+                self.socket.close()
+                logging.info('%s failed to connect to %s: %s' % (
+                    tornado.process.task_id(),
+                    str(self.addr),
+                    os.strerror(err) if err else "-"
+                ))
+                io_loop.add_timeout(time.time() + RECONNECT_INTERVAL, self.start_connection)
+                return
+            if event & io_loop.WRITE:
+                self.state = Connection.CONNECTED
+                logging.info('%s connected to %s' % (tornado.process.task_id(),
+                                                     str(self.addr)))
+                io_loop.update_handler(fd, io_loop.READ)
+                return
+            else:
+                logging.error('%s unexpected event %d' % (tornado.process.task_id(),
+                                                     event))
+
+        elif self.state == Connection.CONNECTED:
+            if event & io_loop.READ:
+                self.state = Connection.DISCONNECTED
+                io_loop.remove_handler(fd)
+                self.socket.close()
+                logging.info('%s error on socket %s, close connection' % (
+                    tornado.process.task_id(),
+                    str(self.addr)
+                ))
+                io_loop.add_timeout(time.time() + RECONNECT_INTERVAL, self.start_connection)
+                return
+            if event & io_loop.WRITE:
+                logger.debug('write event')
+                while self.to_send > 0:
+                    try:
+                        r = self.socket.send(self.to_send_data[self.sent:self.sent+min(self.to_send, CHUNK_SIZE)])
+                        logger.debug("r=%d" % r)
+                        self.sent += r
+                        self.to_send -= r
+                    except socket.error as e:
+                        if e.args[0] in (errno.EWOULDBLOCK, errno.EINPROGRESS):
+                            return
+                    except Exception, e:
+                        err = self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                        logger.error('send: %s' % str(e.args[0]))
+                        self.handle_error(err)
+                        break
+                io_loop.update_handler(fd, io_loop.READ)
+                self.to_send = None
+                self.to_send_data = None
+                cb = self.send_callback
+                self.send_callback = None
+                cb()
+                return
+
+        err = self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+        self.handle_error(err)
 
     def start_connection(self):
-        def maybe_connected(fd, event):
-            io_loop.remove_handler(fd)
-            logging.debug('%s maybe_connected received event %s' % (
-                tornado.process.task_id(),
-                str(event))
-            )
-            err = self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-            if err:
-                self.handle_error(err)
-                return
-            self.state = Connection.CONNECTED
-            logging.info('%s connected to %s' % (tornado.process.task_id(),
-                                                 str(self.addr)))
-            return
         logging.info('%s start connection to %s' % (
             tornado.process.task_id(),
             str(self.addr))
@@ -106,47 +160,29 @@ class Connection(object):
         self.socket = socket.socket()
         self.socket.setblocking(0)
         io_loop = tornado.ioloop.IOLoop.instance()
+        handler = functools.partial(self.event_handler)
         try:
             self.socket.connect(self.addr)
             self.state = Connection.CONNECTED
             logging.info('%s connected to %s' % (tornado.process.task_id(), str(self.addr)))
+            io_loop.add_handler(self.socket.fileno(), handler, io_loop.READ)
+            return
         except socket.error, e:
-            if e.args[0] not in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EAGAIN):
-                self.handle_error(e.args[0])
+            if e.args[0] in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EAGAIN):
+                io_loop.add_handler(self.socket.fileno(), handler, io_loop.WRITE)
                 return
-        connect_callback = functools.partial(maybe_connected)
-        io_loop.add_handler(self.socket.fileno(), connect_callback, io_loop.WRITE)
-        return
+            raise
 
     @gen.engine
     def write(self, data, callback=None):
-        def write_callback(fd, _):
-            while self.to_send > 0:
-                try:
-                    r = self.socket.send(data[self.sent:self.sent+min(self.to_send, CHUNKSIZE)])
-                    self.sent += r
-                    self.to_send -= r
-                except socket.error as e:
-                    if e.args[0] in (errno.EWOULDBLOCK, errno.EINPROGRESS):
-                        return
-                except Exception, e:
-                    err = self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                    logger.error('send: %s' % str(e.args[0]))
-                    self.handle_error(err)
-                    break
-            io_loop.remove_handler(fd)
-            self.to_send = None
-            callback()
-            return
-
         io_loop = tornado.ioloop.IOLoop.instance()
         if not self.to_send is None:
             raise
+        self.to_send_data = data
         self.to_send = len(data)
         self.sent = 0
-        io_loop.add_handler(self.socket.fileno(),
-                            functools.partial(write_callback),
-                            io_loop.WRITE)
+        self.send_callback = callback
+        io_loop.update_handler(self.socket.fileno(), io_loop.READ|io_loop.WRITE)
 
 
 class Destination(object):
@@ -188,10 +224,10 @@ class Destination(object):
             connection = choice(available_connections)
             try:
                 yield gen.Task(connection.write, header + data)
-            except IOError:
-                logging.error('IOError writing to %s' % (str(connection.addr)))
+            # except IOError:
+            #     logging.error('IOError writing to %s' % (str(connection.addr)))
             except:
-                logging.error('Unexpected exception '+str(sys.exc_info()))
+                logging.error('Unexpected exception '+traceback.format_exc())
         self.in_transmit = False
         if callback:
             callback()
@@ -270,7 +306,7 @@ class LineHandler(object):
                 if got_bytes is None:
                     break
                 buff = record.getvalue()
-                if len(buff) >= 8192:
+                if len(buff) >= MAX_LINE_LENGTH:
                     logger.error('Line is too long, abort reading')
                     break
                 eol = buff.find('\n')
