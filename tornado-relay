@@ -7,19 +7,21 @@ import logging
 import struct
 import time
 import sys
+import os
 import signal
+import functools
+import errno
 
 import tornado.ioloop
-import tornado.iostream
 import tornado.process
 import tornado.netutil
 
-from random import choice
-
 from tornado.options import options, define, parse_command_line, parse_config_file
-from collections import deque
 
+from random import choice
+from collections import deque
 from cPickle import loads, dumps
+from cStringIO import StringIO
 
 from carbon.routers import ConsistentHashingRouter, RelayRulesRouter
 
@@ -27,6 +29,7 @@ from tornado import gen
 
 BACKLOG = 100
 RECONNECT_INTERVAL = 10
+CHUNKSIZE = 8 * 1024
 
 define("line_port", type=int, help="port for line interface", default=2013)
 define("pickle_port", type=int, help="port for pickle interface", default=2014)
@@ -52,11 +55,12 @@ if not options.destinations:
 def mysleep(interval, callback):
     tornado.ioloop.IOLoop.instance().add_timeout(time.time() + interval, callback)
 
+
 class Connection(object):
-    '''
+    """
     single connection to destination
-    '''
-    __slots__ = ('socket','stream','state','addr')
+    """
+    __slots__ = ('socket', 'state', 'addr', 'to_send', 'sent')
 
     DISCONNECTED = 0
     CONNECTED = 1
@@ -64,32 +68,91 @@ class Connection(object):
     def __init__(self, addr):
         self.addr = addr
         self.socket = None
-        self.stream = None
         self.state = Connection.DISCONNECTED
-
+        self.to_send = None
+        self.sent = None
         self.start_connection()
 
-    def stream_closed(self):
-        logging.error('%s disconnected from %s' % (tornado.process.task_id(),str(self.addr)))
+    def handle_error(self, err):
+        self.socket.close()
         self.state = Connection.DISCONNECTED
+        self.to_send = self.sent = None
+        logging.info('%s failed to write/connect to %s: %s' % (
+            tornado.process.task_id(),
+            str(self.addr),
+            os.strerror(err)
+        ))
         tornado.ioloop.IOLoop.instance().add_timeout(time.time() + RECONNECT_INTERVAL, self.start_connection)
 
-    @gen.engine
     def start_connection(self):
-        logging.debug('%s start connection to %s' % (tornado.process.task_id(),str(self.addr)))
-        self.socket = socket.socket()
-        self.stream = tornado.iostream.IOStream(self.socket)
-        self.stream.set_close_callback(self.stream_closed)
-        yield gen.Task(self.stream.connect, self.addr)
-        if not self.stream.error:
+        def maybe_connected(fd, event):
+            io_loop.remove_handler(fd)
+            logging.debug('%s maybe_connected received event %s' % (
+                tornado.process.task_id(),
+                str(event))
+            )
+            err = self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+            if err:
+                self.handle_error(err)
+                return
             self.state = Connection.CONNECTED
-            logging.info('%s connected to %s' % (tornado.process.task_id(),str(self.addr)))
-        else:
-            self.state = Connection.DISCONNECTED
-            logging.debug('%s failed to connect to %s' % (tornado.process.task_id(),str(self.addr)))
+            logging.info('%s connected to %s' % (tornado.process.task_id(),
+                                                 str(self.addr)))
+            return
+        logging.info('%s start connection to %s' % (
+            tornado.process.task_id(),
+            str(self.addr))
+        )
+        self.socket = socket.socket()
+        self.socket.setblocking(0)
+        io_loop = tornado.ioloop.IOLoop.instance()
+        try:
+            self.socket.connect(self.addr)
+            self.state = Connection.CONNECTED
+            logging.info('%s connected to %s' % (tornado.process.task_id(), str(self.addr)))
+        except socket.error, e:
+            if e.args[0] not in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EAGAIN):
+                self.handle_error(e.args[0])
+                return
+        connect_callback = functools.partial(maybe_connected)
+        io_loop.add_handler(self.socket.fileno(), connect_callback, io_loop.WRITE)
+        return
+
+    @gen.engine
+    def write(self, data, callback=None):
+        def write_callback(fd, _):
+            while self.to_send > 0:
+                try:
+                    logger.debug('send %d:%s bytes' % (self.sent, self.to_send))
+                    r = self.socket.send(data[self.sent:min(self.to_send, CHUNKSIZE)])
+                    logger.debug('sent: %d' % r)
+                    self.sent += r
+                    self.to_send -= r
+                except socket.error as e:
+                    if e.args[0] in (errno.EWOULDBLOCK, errno.EINPROGRESS):
+                        return
+                except Exception, e:
+                    err = self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                    logger.error('send: %s' % str(e.args[0]))
+                    self.handle_error(err)
+                    break
+            io_loop.remove_handler(fd)
+            self.to_send = None
+            callback()
+            return
+
+        io_loop = tornado.ioloop.IOLoop.instance()
+        if not self.to_send is None:
+            raise
+        self.to_send = len(data)
+        self.sent = 0
+        io_loop.add_handler(self.socket.fileno(),
+                            functools.partial(write_callback),
+                            io_loop.WRITE)
+
 
 class Destination(object):
-    __slots__ = ('name', 'addr', 'queue', 'overflows', 'inxmit', 'connections')
+    __slots__ = ('name', 'addr', 'queue', 'overflows', 'in_transmit', 'connections')
 
     def __init__(self, n):
         """
@@ -101,24 +164,23 @@ class Destination(object):
         self.name = n
         self.queue = deque([], options.maxqlen)
         self.overflows = 0
-        self.inxmit = False
+        self.in_transmit = False
         self.addr = (self.name.split(':')[0], int(self.name.split(':')[1]))
-        self.connections = [Connection(self.addr) for i in range(options.connpool)]
+        self.connections = [Connection(self.addr) for _ in range(options.connpool)]
 
         logger.debug(self.name + ' destination created')
 
-
     @gen.engine
-    def start_sendq(self, callback=None):
-        if self.inxmit:
+    def start_send_queue(self, callback=None):
+        if self.in_transmit:
             if callback:
                 callback()
             return
-        self.inxmit = True
+        self.in_transmit = True
         logger.debug(self.name + ' sending ' + str(self.queue))
         while len(self.queue) > 0:
             available_connections = \
-                [ c for c in self.connections if c.state==Connection.CONNECTED ]
+                [c for c in self.connections if c.state == Connection.CONNECTED]
             if len(available_connections) == 0:
                 break
             # start transmission
@@ -127,17 +189,59 @@ class Destination(object):
             header = struct.pack('!L', length)
             connection = choice(available_connections)
             try:
-                yield gen.Task(connection.stream.write, header + data)
+                yield gen.Task(connection.write, header + data)
             except IOError:
                 logging.error('IOError writing to %s' % (str(connection.addr)))
             except:
-                logging.error('Unexpected exception '+sys.exc_info())
-        self.inxmit = False
+                logging.error('Unexpected exception '+str(sys.exc_info()))
+        self.in_transmit = False
         if callback:
             callback()
 
     def __str__(self):
         return self.name
+
+
+@gen.engine
+def read_bytes(so, rec, num_bytes, callback):
+    """
+    read some bytes and return number or None if error
+    can return more bytes then requested
+    @param so: socket to read from
+    @type  so: socket.socket
+    @param rec: StringIO to read to
+    @type  rec: StringIO
+    @param num_bytes: minimum num of bytes to read (can read more)
+    @type  num_bytes: int
+    @param callback: callback
+    """
+    io_loop = tornado.ioloop.IOLoop.instance()
+
+    def read_data_or_fail(so, callback):
+        def handler(hs, fd, event):
+            logger.debug('received event %s on fd:%d' % (event, fd))
+            io_loop.remove_handler(hs.fileno())
+            socket_data = hs.recv(8192)
+            if not socket_data:
+                hs.close()
+                callback((False, None))
+            else:
+                callback((True, socket_data))
+        read_callback = functools.partial(handler, so)
+        io_loop.add_handler(so.fileno(), read_callback, io_loop.READ)
+
+    rec.seek(0, 2)  # seek to end
+    got = 0
+    while got < num_bytes:
+        r = yield gen.Task(read_data_or_fail, so)
+        (s, d) = r
+        if not s:
+            callback(None)
+            return
+        rec.write(d)
+        got += len(d)
+    callback(got)
+    return
 
 
 class LineHandler(object):
@@ -150,29 +254,59 @@ class LineHandler(object):
         self.destinations = destinations
 
     @gen.engine
-    def __call__(self, s, peer):
+    def __call__(self, sock, peer):
         """
-        @type s: socket.socket
+        @type sock: socket.socket
         @type peer: str
         """
-        stream = tornado.iostream.IOStream(s)
         logger.debug('line socket accepted from '+str(peer))
-        try:
-            router = self.router
-            destinations = self.destinations
-            while not stream.closed():
-                line_data = yield gen.Task(stream.read_until, '\n')
-                logger.debug("got " + line_data.strip())
-                # route data to destinations
-                batches = dict()
-                splitted = line_data.strip().split()
-                data = (splitted[0], (splitted[2], splitted[1]))
+        router = self.router
+        destinations = self.destinations
+        record = StringIO()
+        lines = deque()
+        while True:
+            buff = None
+            eol = -1
+            while True:
+                got_bytes = yield gen.Task(read_bytes, sock, record, 1)
+                if got_bytes is None:
+                    break
+                buff = record.getvalue()
+                if len(buff) >= 8192:
+                    logger.error('Line is too long, abort reading')
+                    break
+                eol = buff.find('\n')
+                if eol >= 0:
+                    break
+            if eol < 0:
+                break
+            while True:
+                line = buff[:eol+1]
+                lines.append(line)
+                logger.debug("received line "+line.strip())
+                buff = buff[eol+1:]
+                eol = buff.find('\n')
+                if eol < 0:
+                    tail = buff
+                    break
 
+            record = StringIO()
+            record.write(tail)
+            logger.debug('reading tail '+tail)
+
+            while len(lines):
+                line = lines.popleft()
+                batches = dict()
+                try:
+                    split = line.strip().split()
+                    data = (split[0], (split[2], split[1]))
+                except IndexError:
+                    continue
                 if len(destinations.keys()) == router.replication_factor:
                     for dest in destinations.keys():
                         batches[dest] = [data]
                 else:
-                    metric = splitted[0]
+                    metric = split[0]
                     for dest in self.router.getDestinations(metric):
                         dest_key = ':'.join(dest)
                         if dest_key in batches:
@@ -184,11 +318,11 @@ class LineHandler(object):
                     if len(destination.queue) >= options.maxqlen:
                         destination.overflows += 1
                     destination.queue.append(dumps(data))
-                    yield gen.Task(destination.start_sendq)
-        except:
-            logger.error(sys.exc_info())
-        finally:
-            stream.close()
+                    yield gen.Task(destination.start_send_queue)
+
+        logger.debug('close connection')
+        sock.close()
+        return
 
 
 class PickleHandler(object):
@@ -201,29 +335,56 @@ class PickleHandler(object):
         self.destinations = destinations
 
     @gen.engine
-    def __call__(self, s, peer):
+    def __call__(self, sock, peer):
         """
-        @type s: socket.socket
+        @type sock: socket.socket
         @type peer: str
         """
-        logger.debug('pickle socket accepted')
-        stream = tornado.iostream.IOStream(s)
 
-        while not stream.closed():
-            data = None
-            try:
-                header = yield gen.Task(stream.read_bytes, struct.calcsize('!L'))
-                msglen = struct.unpack('!L', header)[0]
-                logger.debug('have to read ' + str(msglen) + ' bytes from ' + str(peer))
-                data = yield gen.Task(stream.read_bytes, msglen)
-            except IOError:
-                logging.error('IOError reading data in pickle_handler')
-            except:
-                logging.error('Exception reading data in pickle_handler: '+sys.exc_info())
+        def cleanup():
+            logger.debug('cleaning up')
+            record.close()
 
-            if not data:
-                continue
+        logger.debug('pickle socket accepted from %s' % str(peer))
 
+        record = StringIO()
+        record_length = 0
+        header_length = struct.calcsize('!L')
+
+        while True:
+
+            if record_length < header_length:
+                got_bytes = yield gen.Task(
+                    read_bytes, sock, record,
+                    header_length-record_length
+                )
+                if got_bytes is None:
+                    break
+                record_length += got_bytes
+
+            record.seek(0, 0)  # seek to begin
+            header = record.read(header_length)
+            message_length = struct.unpack('!L', header)[0]
+            record.seek(0, 2)  # seek to end
+            logger.debug('got header, message length=%d' % message_length)
+
+            if record_length < header_length + message_length:
+                got_bytes = yield gen.Task(
+                    read_bytes, sock, record,
+                    header_length+message_length-record_length
+                )
+                if got_bytes is None:
+                    break
+
+            record.seek(header_length, 0)
+            message = record.read(message_length)
+            tail = record.read()
+            record = StringIO()
+            record.write(tail)
+            record_length = len(tail)
+            logger.debug('got message')
+
+            # route received message and place in outgoing queue
             router = self.router
             destinations = self.destinations
 
@@ -231,9 +392,9 @@ class PickleHandler(object):
             batches = dict()
             if len(destinations.keys()) == router.replication_factor:
                 for dest in destinations.keys():
-                    batches[dest] = data
+                    batches[dest] = message
             else:
-                for metric, value in loads(data):
+                for metric, value in loads(message):
                     for dest in self.router.getDestinations(metric):
                         dest_key = ':'.join(dest)
                         if dest_key in batches:
@@ -248,7 +409,13 @@ class PickleHandler(object):
                 if len(destination.queue) >= options.maxqlen:
                     destination.overflows += 1
                 destination.queue.append(data)
-                yield gen.Task(destination.start_sendq)
+                yield gen.Task(destination.start_send_queue)
+
+            logger.debug('continue reading (current length=%d)' % record_length)
+
+        logger.debug('connection closed')
+        cleanup()
+        return
 
 
 def main(opts):
