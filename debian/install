@@ -1,2 +1,2 @@
 tornado-relay usr/sbin
-default var/lib/tornado-relay
+default.dist var/lib/tornado-relay
