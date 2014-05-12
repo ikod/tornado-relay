@@ -32,6 +32,7 @@ BACKLOG = 100
 RECONNECT_INTERVAL = 10
 CHUNK_SIZE = 16 * 1024
 MAX_LINE_LENGTH = 16 * 1024
+MAX_METRIC_NAME_LENGTH = 230
 
 define("line_port", type=int, help="port for line interface", default=2013)
 define("pickle_port", type=int, help="port for pickle interface", default=2014)
@@ -130,6 +131,10 @@ class Connection(object):
                 while self.to_send > 0:
                     try:
                         r = self.socket.send(self.to_send_data[self.sent:self.sent+min(self.to_send, CHUNK_SIZE)])
+                        if r <= 0:
+                            err = self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                            self.handle_error(err)
+                            break
                         logger.debug("r=%d" % r)
                         self.sent += r
                         self.to_send -= r
@@ -255,10 +260,16 @@ def read_bytes(so, rec, num_bytes, callback):
         def handler(hs, fd, event):
             logger.debug('received event %s on fd:%d' % (event, fd))
             io_loop.remove_handler(hs.fileno())
-            socket_data = hs.recv(8192)
+            try:
+                socket_data = hs.recv(8192)
+            except:
+                hs.close()
+                callback((False, None))
+                return
             if not socket_data:
                 hs.close()
                 callback((False, None))
+                return
             else:
                 callback((True, socket_data))
         read_callback = functools.partial(handler, so)
@@ -307,7 +318,7 @@ class LineHandler(object):
                     break
                 buff = record.getvalue()
                 if len(buff) >= MAX_LINE_LENGTH:
-                    logger.error('Line is too long, abort reading')
+                    #logger.error('Line is too long, abort reading')
                     break
                 eol = buff.find('\n')
                 if eol >= 0:
@@ -424,11 +435,14 @@ class PickleHandler(object):
 
             # route data to destinations
             batches = dict()
-            if len(destinations.keys()) == router.replication_factor:
+            if False and len(destinations.keys()) == router.replication_factor:
                 for dest in destinations.keys():
                     batches[dest] = message
             else:
                 for metric, value in loads(message):
+                    if len(metric) >= MAX_METRIC_NAME_LENGTH:
+                        logging.error('too long metric: %s' % metric)
+                        continue
                     for dest in self.router.getDestinations(metric):
                         dest_key = ':'.join(dest)
                         if dest_key in batches:
