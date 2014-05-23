@@ -1,8 +1,14 @@
+tornado-relay (1.0.0-12) unstable; urgency=low
+
+  * correct dest close
+
+ -- Igor <igor.khasilev@gmail.com>  Sat, 28 Dec 2013 16:37:34 +0000
+
 tornado-relay (1.0.0-11) unstable; urgency=low
 
-  * fix for socket IOError
+  * fox in 'send' to destination
 
- -- Igor <igor.khasilev@gmail.com>  Sat, 28 Dec 2013 10:05:14 +0000
+ -- Igor <igor.khasilev@gmail.com>  Sat, 28 Dec 2013 11:52:06 +0000
 
 tornado-relay (1.0.0-10) unstable; urgency=low
 
