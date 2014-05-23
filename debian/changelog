@@ -1,3 +1,9 @@
+tornado-relay (1.0.0-13) unstable; urgency=low
+
+  * hangup on downstream reconnect fixed
+
+ -- Igor <igor.khasilev@gmail.com>  Sat, 28 Dec 2013 16:37:34 +0000
+
 tornado-relay (1.0.0-12) unstable; urgency=low
 
   * correct dest close
@@ -6,7 +12,7 @@ tornado-relay (1.0.0-12) unstable; urgency=low
 
 tornado-relay (1.0.0-11) unstable; urgency=low
 
-  * fox in 'send' to destination
+  * fix in 'send' to destination
 
  -- Igor <igor.khasilev@gmail.com>  Sat, 28 Dec 2013 11:52:06 +0000
 
