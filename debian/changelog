@@ -1,3 +1,9 @@
+tornado-relay (1.0.0-15) unstable; urgency=low
+
+  * exception when read from downstream on error
+
+ -- Igor <igor.khasilev@gmail.com>  Sat, 28 Dec 2013 16:37:34 +0000
+
 tornado-relay (1.0.0-14) unstable; urgency=low
 
   * hangup on downstream reconnect fixed

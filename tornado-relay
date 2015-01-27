@@ -118,7 +118,7 @@ class Connection(object):
 
         elif self.state == Connection.CONNECTED:
             if event & io_loop.READ:
-                r = self.socket.recv(1500)
+                #r = self.socket.recv(1500)
                 self.state = Connection.DISCONNECTED
                 io_loop.remove_handler(fd)
                 self.socket.close()
@@ -130,7 +130,8 @@ class Connection(object):
                 self.to_send = self.sent = None
                 cb = self.send_callback
                 self.send_callback = None
-                cb()
+                if cb is not None:
+                    cb()
                 return
 
             if event & io_loop.WRITE:
@@ -278,7 +279,7 @@ def read_bytes(so, rec, num_bytes, callback):
     """
     io_loop = tornado.ioloop.IOLoop.instance()
 
-    def read_data_or_fail(so, callback):
+    def read_data_or_fail(__so, __callback):
         def handler(hs, fd, event):
             logger.debug('received event %s on fd:%d' % (event, fd))
             io_loop.remove_handler(hs.fileno())
@@ -286,16 +287,16 @@ def read_bytes(so, rec, num_bytes, callback):
                 socket_data = hs.recv(8192)
             except:
                 hs.close()
-                callback((False, None))
+                __callback((False, None))
                 return
             if not socket_data:
                 hs.close()
-                callback((False, None))
+                __callback((False, None))
                 return
             else:
-                callback((True, socket_data))
-        read_callback = functools.partial(handler, so)
-        io_loop.add_handler(so.fileno(), read_callback, io_loop.READ)
+                __callback((True, socket_data))
+        read_callback = functools.partial(handler, __so)
+        io_loop.add_handler(__so.fileno(), read_callback, io_loop.READ)
 
     rec.seek(0, 2)  # seek to end
     got = 0
@@ -340,7 +341,7 @@ class LineHandler(object):
                     break
                 buff = record.getvalue()
                 if len(buff) >= MAX_LINE_LENGTH:
-                    #logger.error('Line is too long, abort reading')
+                    #  logger.error('Line is too long, abort reading')
                     break
                 eol = buff.find('\n')
                 if eol >= 0:
@@ -463,7 +464,7 @@ class PickleHandler(object):
             else:
                 for metric, value in loads(message):
                     if len(metric) >= MAX_METRIC_NAME_LENGTH:
-                        #logging.error('too long metric: %s' % metric)
+                        #  logging.error('too long metric: %s' % metric)
                         continue
                     for dest in self.router.getDestinations(metric):
                         dest_key = ':'.join(dest)
