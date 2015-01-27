@@ -279,7 +279,7 @@ def read_bytes(so, rec, num_bytes, callback):
     """
     io_loop = tornado.ioloop.IOLoop.instance()
 
-    def read_data_or_fail(__so, __callback):
+    def read_data_or_fail(__so, callback):
         def handler(hs, fd, event):
             logger.debug('received event %s on fd:%d' % (event, fd))
             io_loop.remove_handler(hs.fileno())
@@ -287,14 +287,14 @@ def read_bytes(so, rec, num_bytes, callback):
                 socket_data = hs.recv(8192)
             except:
                 hs.close()
-                __callback((False, None))
+                callback((False, None))
                 return
             if not socket_data:
                 hs.close()
-                __callback((False, None))
+                callback((False, None))
                 return
             else:
-                __callback((True, socket_data))
+                callback((True, socket_data))
         read_callback = functools.partial(handler, __so)
         io_loop.add_handler(__so.fileno(), read_callback, io_loop.READ)
 
